@@ -1,10 +1,6 @@
-import os
-import json
-import asyncio
-import logging
+import os, json, asyncio, logging
 from dotenv import load_dotenv
-
-from shapely.geometry import shape, Point, Polygon
+from shapely.geometry import shape
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -12,8 +8,9 @@ from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiohttp import web 
 
-from bot import states
+from . import states
 from .services import geocoding, osm, dem, metrics, pdf, map_render
 from .storage.cache import ensure_dirs
 from .providers.external import get_geometry_by_cadnum
@@ -22,36 +19,60 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:8080")
-EXTERNAL_GEOM_PROVIDER = os.getenv("EXTERNAL_GEOM_PROVIDER", "off") == "on"
+PORT = int(os.getenv("PORT", "8080"))  # Replit пробрасывает этот порт
 
-# Инициализация бота/DP/роутера
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+def _default_replit_url():
+    slug = os.getenv("REPL_SLUG")
+    owner = os.getenv("REPL_OWNER")
+    if slug and owner:
+        return f"https://{slug}.{owner}.repl.co/"
+    return ""
+
+WEBAPP_URL = os.getenv("WEBAPP_URL", _default_replit_url()).strip()
+
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 ensure_dirs()
 
-def main_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗺️ Открыть карту", web_app=WebAppInfo(url=WEBAPP_URL)),
-         InlineKeyboardButton(text="📄 Загрузить GeoJSON/KML", callback_data="upload_help")],
-        [InlineKeyboardButton(text="📍 Точка + площадь", callback_data="point_area"),
-         InlineKeyboardButton(text="🔎 КН → контур", callback_data="cadnum")],
-        [InlineKeyboardButton(text="📊 Компаративы", callback_data="comps")]
+async def start_web():
+    app = web.Application()
+    # Отдаём папку webapp на корне /
+    app.add_routes([
+        web.get("/health", lambda request: web.Response(text="ok")),
+        web.static("/", path="webapp", show_index=True),
     ])
-    return kb
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
+    await site.start()
+    logging.info(f"Web server started on https port {PORT} (Replit will expose HTTPS)")
+
+def main_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    if WEBAPP_URL.startswith("https://"):
+        rows.append([
+            InlineKeyboardButton(text="🗺️ Открыть карту", web_app=WebAppInfo(url=WEBAPP_URL)),
+            InlineKeyboardButton(text="📄 Загрузить GeoJSON/KML", callback_data="upload_help"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton(text="📄 Загрузить GeoJSON/KML", callback_data="upload_help")])
+    rows.append([
+        InlineKeyboardButton(text="📍 Точка + площадь", callback_data="point_area"),
+        InlineKeyboardButton(text="🔎 КН → контур", callback_data="cadnum"),
+    ])
+    rows.append([InlineKeyboardButton(text="📊 Компаративы", callback_data="comps")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 @router.message(CommandStart())
 @router.message(Command("help"))
 async def cmd_start(m: types.Message):
+    hint = "" if WEBAPP_URL.startswith("https://") else "Кнопка карты временно скрыта — нужен HTTPS.\nИспользуйте «Точка + площадь» или загрузите GeoJSON/KML."
     await m.answer(
         "Гео‑скоринг участков: нарисуйте полигон или пришлите GeoJSON/KML. "
-        "Подтянем OSM/DEM, посчитаем уклон, доступность, близость к воде/дорогам и сделаем PDF.",
+        "Подтянем OSM/DEM, посчитаем уклон, доступность, близость к воде/дорогам и сделаем PDF.\n" + hint,
         reply_markup=main_keyboard()
     )
 
@@ -184,14 +205,15 @@ async def run_pipeline_and_reply(m: types.Message, geom_wgs84, source: str = "")
     map_path = await asyncio.to_thread(map_render.render_static_map, geom_wgs84, osm_data, "cache/maps")
     # 6) PDF
     pdf_path = await asyncio.to_thread(pdf.render_report, metric_set, addr, source, map_path)
-
     text = metrics.format_brief(metric_set, addr)
     await m.answer_photo(photo=FSInputFile(map_path), caption=text)
-    await m.answer_document(document=FSInputFile(pdf_path))
+    if pdf_path and os.path.exists(pdf_path):
+        await m.answer_document(document=FSInputFile(pdf_path))
 
 async def main():
     if not BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN не указан в .env")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не указан")
+    await start_web()          # запускаем веб-сервер (не блокирует)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

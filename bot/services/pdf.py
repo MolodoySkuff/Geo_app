@@ -1,23 +1,28 @@
-import os, datetime
+import os
+import datetime
+import logging
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from weasyprint import HTML
 
 env = Environment(
     loader=FileSystemLoader("templates"),
     autoescape=select_autoescape(["html"])
 )
 
-def render_report(metric_set, addr, source="", map_path=""):
-    tpl = env.get_template("report.html")
-    html = tpl.render(
-        addr=addr,
-        m=metric_set,
-        source=source,
-        generated_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-        map_path=map_path
-    )
-    out_dir = "cache/reports"
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
-    HTML(string=html, base_url=os.getcwd()).write_pdf(out_path)
-    return out_path
+def _wrap(c, text, max_width, font_name="Helvetica", font_size=10):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    words = (text or "").split()
+    line, lines = "", []
+    for w in words:
+        test = (line + " " + w).strip()
+        if stringWidth(test, font_name, font_size) <= max_width:
+            line = test
+        else:
+            if line:
+                lines.append(line)
+            line = w
+    if line:
+        lines.append(line)
+    return lines
+
+def render_report(*args, **kwargs):
+    return None

@@ -1,0 +1,5 @@
+html, body { height: 100%; margin: 0; }
+#map { height: calc(100% - 60px); }
+#panel { height: 60px; display: flex; gap: 8px; align-items: center; padding: 8px; box-shadow: 0 -1px 3px rgba(0,0,0,0.1);}
+button { padding: 10px 16px; border: 0; background: #1f7ae0; color: white; border-radius: 6px; }
+button[disabled] { background: #999; }
