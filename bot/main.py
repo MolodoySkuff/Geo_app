@@ -19,7 +19,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", "8080"))  # Replit пробрасывает этот порт
+PORT = int(os.getenv("PORT", "8080"))
 
 def _default_replit_url():
     slug = os.getenv("REPL_SLUG")
@@ -29,6 +29,22 @@ def _default_replit_url():
     return ""
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", _default_replit_url()).strip()
+
+async def start_web():
+    app = web.Application()
+    # Явно отдаём index.html на /
+    async def index(request):
+        return web.FileResponse(path="webapp/index.html")
+    app.router.add_get("/", index)
+    # Статика (css/js) — по тем же путям
+    app.router.add_static("/", path="webapp", show_index=False)
+    # Health
+    app.router.add_get("/health", lambda request: web.Response(text="ok"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
+    await site.start()
+
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
@@ -116,9 +132,13 @@ async def cadnum_start(c: types.CallbackQuery, state: FSMContext):
 async def cadnum_handle(m: types.Message, state: FSMContext):
     cad = m.text.strip()
     geom = None
-    if EXTERNAL_GEOM_PROVIDER:
-        geom = await asyncio.to_thread(get_geometry_by_cadnum, cad)
-    if geom is None:
+    provider_enabled = os.getenv("EXTERNAL_GEOM_PROVIDER", "off").strip().lower() in ("on", "1", "true", "yes")
+    if provider_enabled:
+        try:
+            geom = await asyncio.to_thread(get_geometry_by_cadnum, cad)
+        except Exception as e:
+            await m.answer(f"Ошибка провайдера КН→контур: {e}")
+    if not geom:
         await m.answer("Пока нет подключённого провайдера КН→контур. Нарисуйте участок на карте или пришлите GeoJSON.")
     else:
         await run_pipeline_and_reply(m, geom, source=f"cadnum:{cad}")
@@ -188,6 +208,16 @@ async def comps_collect(m: types.Message, state: FSMContext):
     rows.append({"area_sot": area_sot, "price": price, "link": link, "pp_sot": price / max(area_sot, 0.0001)})
     await state.update_data(rows=rows)
     await m.answer(f"Принято. Сейчас {len(rows)} записей. /done для завершения.")
+
+@router.message(Command("debug"))
+async def debug(m: types.Message):
+    await m.answer(
+        "WEBAPP_URL = {}\nREPL_SLUG = {}\nREPL_OWNER = {}\n".format(
+            os.getenv("WEBAPP_URL"),
+            os.getenv("REPL_SLUG"),
+            os.getenv("REPL_OWNER"),
+        )
+    )
 
 async def run_pipeline_and_reply(m: types.Message, geom_wgs84, source: str = ""):
     await m.answer("Обрабатываем участок… это займёт ~5–20 секунд.")
