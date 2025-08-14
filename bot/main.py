@@ -5,7 +5,10 @@ from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, AllowedUpdates
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web 
@@ -66,6 +69,12 @@ async def start_web():
     await site.start()
     logging.info(f"Web server started on https port {PORT} (Replit will expose HTTPS)")
 
+def location_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить мою геолокацию", request_location=True)]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+
 def main_keyboard() -> InlineKeyboardMarkup:
     rows = []
     if WEBAPP_URL.startswith("https://"):
@@ -81,6 +90,20 @@ def main_keyboard() -> InlineKeyboardMarkup:
     ])
     rows.append([InlineKeyboardButton(text="📊 Компаративы", callback_data="comps")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+@router.callback_query(F.data == "point_area")
+async def point_area_start(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(states.PointArea.waiting_location)
+    await c.message.answer("Отправьте геопозицию 📍 (на мобильном появится кнопка ниже). "
+                           "Либо отправьте координаты текстом: «55.75, 37.61».",
+                           reply_markup=location_kb())
+    await c.answer()
+
+@router.message(StateFilter(states.PointArea.waiting_location), F.location)
+async def point_area_loc(m: types.Message, state: FSMContext):
+    await state.update_data(lat=m.location.latitude, lon=m.location.longitude)
+    await state.set_state(states.PointArea.waiting_area)
+    await m.answer("Введите площадь в сотках (например, 10).", reply_markup=ReplyKeyboardRemove())
 
 @router.message(lambda m: getattr(m, "web_app_data", None) is not None)
 async def webapp_data_fallback(m: types.Message):
@@ -226,6 +249,40 @@ async def comps_collect(m: types.Message, state: FSMContext):
     await state.update_data(rows=rows)
     await m.answer(f"Принято. Сейчас {len(rows)} записей. /done для завершения.")
 
+# Явный фильтр по типу сообщения
+@router.message(F.content_type == types.ContentType.WEB_APP_DATA)
+async def webapp_data_ct(m: types.Message):
+    try:
+        raw = m.web_app_data.data
+        logging.info("Got WEB_APP_DATA (content_type): %s bytes", len(raw))
+        payload = json.loads(raw)
+        geom = shape(payload["geometry"]) if payload.get("type") == "Feature" else shape(payload)
+        await run_pipeline_and_reply(m, geom, source="webapp")
+    except Exception as e:
+        logging.exception("WEB_APP_DATA error")
+        await m.answer(f"Ошибка WebApp данных: {e}")
+
+# Резервный обработчик — на случай несовпадения enum
+@router.message(lambda m: getattr(m, "web_app_data", None) is not None)
+async def webapp_data_any(m: types.Message):
+    try:
+        raw = m.web_app_data.data
+        logging.info("Got WEB_APP_DATA (fallback): %s bytes", len(raw))
+        payload = json.loads(raw)
+        geom = shape(payload["geometry"]) if payload.get("type") == "Feature" else shape(payload)
+        await run_pipeline_and_reply(m, geom, source="webapp")
+    except Exception as e:
+        logging.exception("WEB_APP_DATA fallback error")
+        await m.answer(f"Ошибка WebApp данных: {e}")
+
+# Финальный «ловец» всех сообщений — только для диагностики
+@router.message()
+async def any_message_logger(m: types.Message):
+    if getattr(m, "web_app_data", None):
+        logging.info("Any logger sees web_app_data with %s bytes", len(m.web_app_data.data))
+        return
+    # Комментарий: этот хендлер оставьте временно, чтобы видеть, что вообще прилетает.
+
 @router.message(Command("debug"))
 async def debug(m: types.Message):
     wa = getattr(m, "web_app_data", None)
@@ -234,7 +291,7 @@ async def debug(m: types.Message):
 async def run_pipeline_and_reply(m: types.Message, geom_wgs84, source: str = ""):
     await m.answer("Обрабатываем участок… это займёт ~5–20 секунд.")
 
-    
+
     # 1) Адрес
     centroid = geom_wgs84.centroid
     addr = await asyncio.to_thread(geocoding.reverse_geocode, centroid.y, centroid.x)
@@ -257,8 +314,8 @@ async def run_pipeline_and_reply(m: types.Message, geom_wgs84, source: str = "")
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не указан")
-    await start_web()          # запускаем веб-сервер (не блокирует)
-    await dp.start_polling(bot)
+    await start_web()  # ваш aiohttp-сервер
+    await dp.start_polling(bot, allowed_updates=AllowedUpdates.all())
 
 if __name__ == "__main__":
     asyncio.run(main())
