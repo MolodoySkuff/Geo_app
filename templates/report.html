@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  h1,h2 { margin: 0.2em 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .box { border: 1px solid #ddd; border-radius: 6px; padding: 10px; }
+  .muted { color: #666; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4px 6px; border-bottom: 1px solid #eee; }
+</style>
+</head>
+<body>
+  <h1>Скоринг земельного участка</h1>
+  <div class="muted">Источник геометрии: {{ source }} | Отчёт: {{ generated_at }}</div>
+  <h2>Локация</h2>
+  <div>{{ addr.display_name or "—" }}</div>
+  <img src="{{ map_path }}" style="width: 100%; margin: 8px 0;"/>
+
+  <div class="grid">
+    <div class="box">
+      <h3>Итоговый скор</h3>
+      <table>
+        <tr><td>Итого</td><td><b>{{ m.score.total }}/100</b></td></tr>
+        <tr><td>Доступность</td><td>{{ m.score.access|round|int }}</td></tr>
+        <tr><td>Уклон</td><td>{{ m.score.slope|round|int }}</td></tr>
+        <tr><td>Водные риски</td><td>{{ m.score.flood|round|int }}</td></tr>
+        <tr><td>Соц/транспорт</td><td>{{ m.score.infra|round|int }}</td></tr>
+        <tr><td>Инженерные сети</td><td>{{ m.score.power|round|int }}</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>Площадка</h3>
+      <table>
+        <tr><td>Площадь</td><td>{{ "%.2f"|format(m.area_ha) }} га</td></tr>
+        <tr><td>Касание дороги</td><td>{{ "Да" if m.touches_road else "Нет" }}</td></tr>
+        <tr><td>Фасад вдоль дороги</td><td>{{ m.facade_len_m|round|int }} м</td></tr>
+        <tr><td>Влезет дом 10×10</td><td>{{ "Да" if m.can_house_10x10 else "Сомнительно" }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top: 8px;">
+    <div class="box">
+      <h3>Дистанции (м)</h3>
+      <table>
+        <tr><td>До основной дороги</td><td>{{ m.d_road_m|default("—")|int if m.d_road_m else "—" }}</td></tr>
+        <tr><td>До воды</td><td>{{ m.d_water_m|default("—")|int if m.d_water_m else "—" }}</td></tr>
+        <tr><td>До остановки</td><td>{{ m.d_stop_m|default("—")|int if m.d_stop_m else "—" }}</td></tr>
+        <tr><td>До населённого пункта</td><td>{{ m.d_place_m|default("—")|int if m.d_place_m else "—" }}</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>Рельеф (SRTM)</h3>
+      <table>
+        <tr><td>Мин/макс (м)</td><td>{{ m.dem.elev_min|round|int }} / {{ m.dem.elev_max|round|int }}</td></tr>
+        <tr><td>Медиана (м)</td><td>{{ m.dem.elev_med|round|int }}</td></tr>
+        <tr><td>Уклон (индикативный, %)</td><td>{{ m.dem.slope_indicative_pct|round(1) }}</td></tr>
+        <tr><td>Относительная низинность (м)</td><td>{{ m.dem.rel_lowness_m|round(1) }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <p class="muted">
+    Источники: OpenStreetMap (ODbL), Nominatim, SRTM/Copernicus DEM.
+    Оценка подтопления — индикативная (не юридическая).
+  </p>
+</body>
+</html>

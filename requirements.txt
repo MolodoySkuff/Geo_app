@@ -1,0 +1,11 @@
+aiogram==3.21.0
+python-dotenv==1.0.1
+shapely>=2.0.6
+pyproj>=3.7.0
+numpy>=2.0.0
+srtm.py==0.3.6
+requests==2.32.3
+jinja2==3.1.6
+weasyprint==62.3
+pillow==11.0.0
+staticmap==0.5.7
