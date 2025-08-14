@@ -82,6 +82,23 @@ def main_keyboard() -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text="📊 Компаративы", callback_data="comps")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+@router.message(lambda m: getattr(m, "web_app_data", None) is not None)
+async def webapp_data_fallback(m: types.Message):
+    try:
+        raw = m.web_app_data.data
+        logging.info("Got WEB_APP_DATA: %s bytes", len(raw))
+        payload = json.loads(raw)
+        if "type" in payload and payload["type"] == "Feature" and "geometry" in payload:
+            g = shape(payload["geometry"])
+        elif "type" in payload and payload["type"] in ("Polygon", "MultiPolygon"):
+            g = shape(payload)
+        else:
+            raise ValueError("Ожидался GeoJSON Feature/Polygon")
+        await run_pipeline_and_reply(m, g, source="webapp")
+    except Exception as e:
+        logging.exception("WEB_APP_DATA error")
+        await m.answer(f"Ошибка WebApp данных: {e}")
+
 @router.message(CommandStart())
 @router.message(Command("help"))
 async def cmd_start(m: types.Message):
@@ -211,16 +228,13 @@ async def comps_collect(m: types.Message, state: FSMContext):
 
 @router.message(Command("debug"))
 async def debug(m: types.Message):
-    await m.answer(
-        "WEBAPP_URL = {}\nREPL_SLUG = {}\nREPL_OWNER = {}\n".format(
-            os.getenv("WEBAPP_URL"),
-            os.getenv("REPL_SLUG"),
-            os.getenv("REPL_OWNER"),
-        )
-    )
-
+    wa = getattr(m, "web_app_data", None)
+    await m.answer(f"WEBAPP_URL={os.getenv('WEBAPP_URL')}\n"
+                   f"Has web_app_data in last msg? {'yes' if wa else 'no'}")
 async def run_pipeline_and_reply(m: types.Message, geom_wgs84, source: str = ""):
     await m.answer("Обрабатываем участок… это займёт ~5–20 секунд.")
+
+    
     # 1) Адрес
     centroid = geom_wgs84.centroid
     addr = await asyncio.to_thread(geocoding.reverse_geocode, centroid.y, centroid.x)
